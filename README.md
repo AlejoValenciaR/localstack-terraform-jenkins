@@ -86,10 +86,6 @@ Create these credentials in Jenkins (`Manage Jenkins -> Credentials`) as **Secre
 3. Set pipeline script source to `Jenkinsfile`.
 4. Save.
 
-At run time, only `ACTION` is a Jenkins parameter:
-
-- `ACTION`: `plan`, `apply`, or `destroy`
-
 State backend values are now fixed in `Jenkinsfile` environment variables:
 
 - `TFSTATE_STORAGE_ACCOUNT=alejatfstate2026demo`
@@ -104,7 +100,7 @@ In GitHub repo settings:
 - Content type: `application/json`
 - Event: `Just the push event`
 
-This triggers Jenkins on every push. For webhook builds without manual parameters, the pipeline defaults to a plan-style flow.
+This triggers Jenkins on every push. After `terraform validate`, Jenkins pauses and asks you which path to take: `apply`, `destroy`, or `abort`.
 
 ## 6) Pipeline Behavior
 
@@ -113,15 +109,15 @@ Pipeline stages:
 1. `checkout`
 2. `terraform init` (Azure backend style via `-backend-config`)
 3. `fmt/validate`
-4. `plan`
-5. `manual approval` (only for `apply` or `destroy`)
+4. `choose action`
+5. `plan`
 6. `apply/destroy`
 
-How `ACTION` works:
+How the runtime action works:
 
-- `plan`: only runs `terraform plan`
-- `apply`: runs plan, waits for approval, then applies planned changes
-- `destroy`: runs destroy-plan, waits for approval, then applies destroy plan
+- `apply`: Jenkins creates a normal plan and then applies it
+- `destroy`: Jenkins creates a destroy plan and then applies it
+- `abort`: Jenkins stops the build without changing infrastructure
 
 ## 7) Optional EKS
 

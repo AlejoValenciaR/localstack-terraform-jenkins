@@ -11,10 +11,6 @@ pipeline {
     disableConcurrentBuilds()
   }
 
-  parameters {
-    choice(name: 'ACTION', choices: ['plan', 'apply', 'destroy'], description: 'Terraform action to run.')
-  }
-
   environment {
     TF_IN_AUTOMATION      = 'true'
     TF_INPUT              = 'false'
@@ -23,6 +19,7 @@ pipeline {
     TFSTATE_STORAGE_ACCOUNT = 'alejatfstate2026demo'
     TFSTATE_CONTAINER       = 'tfstate'
     TFSTATE_KEY             = 'localstack-terraform-jenkins.tfstate'
+    TF_ACTION              = ''
     ARM_USE_AZUREAD         = 'true'
 
     LS_AWS_ACCESS_KEY_ID     = credentials('LS_AWS_ACCESS_KEY_ID')
@@ -79,11 +76,34 @@ pipeline {
       }
     }
 
+    stage('choose action') {
+      steps {
+        echo 'Waiting for runtime choice: apply, destroy, or abort.'
+        script {
+          env.TF_ACTION = input(
+            message: 'Do you want apply, destroy, or abort?',
+            ok: 'Continue',
+            parameters: [
+              choice(
+                name: 'TF_ACTION',
+                choices: 'apply\ndestroy\nabort',
+                description: 'Choose how this pipeline should continue.'
+              )
+            ]
+          )
+
+          if (env.TF_ACTION == 'abort') {
+            currentBuild.result = 'ABORTED'
+            error('Pipeline aborted by user selection.')
+          }
+        }
+      }
+    }
+
     stage('plan') {
       steps {
         sh '''
           set -euo pipefail
-          ACTION_VALUE="${ACTION:-plan}"
 
           export AWS_ACCESS_KEY_ID="${LS_AWS_ACCESS_KEY_ID}"
           export AWS_SECRET_ACCESS_KEY="${LS_AWS_SECRET_ACCESS_KEY}"
@@ -91,7 +111,7 @@ pipeline {
           export TF_VAR_aws_secret_key="${LS_AWS_SECRET_ACCESS_KEY}"
           export TF_VAR_localstack_endpoint_url="${LS_ENDPOINT_URL}"
 
-          if [ "${ACTION_VALUE}" = "destroy" ]; then
+          if [ "${TF_ACTION}" = "destroy" ]; then
             terraform plan -destroy -out=tfplan
           else
             terraform plan -out=tfplan
@@ -100,19 +120,7 @@ pipeline {
       }
     }
 
-    stage('manual approval') {
-      when {
-        expression { params.ACTION == 'apply' || params.ACTION == 'destroy' }
-      }
-      steps {
-        input message: "Approve Terraform ${params.ACTION}?", ok: 'Proceed'
-      }
-    }
-
     stage('apply/destroy') {
-      when {
-        expression { params.ACTION == 'apply' || params.ACTION == 'destroy' }
-      }
       steps {
         sh '''
           set -euo pipefail
