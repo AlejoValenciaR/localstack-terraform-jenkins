@@ -86,12 +86,15 @@ Create these credentials in Jenkins (`Manage Jenkins -> Credentials`) as **Secre
 3. Set pipeline script source to `Jenkinsfile`.
 4. Save.
 
-At run time, provide these Jenkins parameters:
+At run time, only `ACTION` is a Jenkins parameter:
 
 - `ACTION`: `plan`, `apply`, or `destroy`
-- `TFSTATE_STORAGE_ACCOUNT`: Azure Storage account for tfstate
-- `TFSTATE_CONTAINER`: default `tfstate`
-- `TFSTATE_KEY`: default `localstack-terraform-jenkins.tfstate`
+
+State backend values are now fixed in `Jenkinsfile` environment variables:
+
+- `TFSTATE_STORAGE_ACCOUNT=alejatfstate2026demo`
+- `TFSTATE_CONTAINER=tfstate`
+- `TFSTATE_KEY=localstack-terraform-jenkins.tfstate`
 
 ## 5) Configure GitHub Webhook
 
@@ -101,7 +104,7 @@ In GitHub repo settings:
 - Content type: `application/json`
 - Event: `Just the push event`
 
-This triggers Jenkins on every push.
+This triggers Jenkins on every push. For webhook builds without manual parameters, the pipeline defaults to a plan-style flow.
 
 ## 6) Pipeline Behavior
 

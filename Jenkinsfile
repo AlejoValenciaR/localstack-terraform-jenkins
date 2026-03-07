@@ -7,20 +7,23 @@ pipeline {
 
   options {
     timestamps()
+    ansiColor('xterm')
     disableConcurrentBuilds()
   }
 
   parameters {
     choice(name: 'ACTION', choices: ['plan', 'apply', 'destroy'], description: 'Terraform action to run.')
-    string(name: 'TFSTATE_STORAGE_ACCOUNT', defaultValue: 'alejatfstate2026demo', description: 'Azure Storage account name for Terraform state.')
-    string(name: 'TFSTATE_CONTAINER', defaultValue: 'tfstate', description: 'Azure Blob container name for Terraform state.')
-    string(name: 'TFSTATE_KEY', defaultValue: 'localstack-terraform-jenkins.tfstate', description: 'State file key in the Azure Blob container.')
   }
 
   environment {
     TF_IN_AUTOMATION      = 'true'
     TF_INPUT              = 'false'
+    TF_CLI_ARGS           = '-no-color'
     TF_VAR_aws_region     = 'us-east-1'
+    TFSTATE_STORAGE_ACCOUNT = 'alejatfstate2026demo'
+    TFSTATE_CONTAINER       = 'tfstate'
+    TFSTATE_KEY             = 'localstack-terraform-jenkins.tfstate'
+    ARM_USE_AZUREAD         = 'true'
 
     LS_AWS_ACCESS_KEY_ID     = credentials('LS_AWS_ACCESS_KEY_ID')
     LS_AWS_SECRET_ACCESS_KEY = credentials('LS_AWS_SECRET_ACCESS_KEY')
@@ -46,8 +49,8 @@ pipeline {
         sh '''
           set -euo pipefail
 
-          if [ -z "${TFSTATE_STORAGE_ACCOUNT}" ]; then
-            echo "TFSTATE_STORAGE_ACCOUNT parameter is required."
+          if [ -z "${TFSTATE_STORAGE_ACCOUNT:-}" ]; then
+            echo "TFSTATE_STORAGE_ACCOUNT is required."
             exit 1
           fi
 
@@ -61,11 +64,7 @@ pipeline {
             -backend-config="resource_group_name=${TFSTATE_RESOURCE_GROUP}" \
             -backend-config="storage_account_name=${TFSTATE_STORAGE_ACCOUNT}" \
             -backend-config="container_name=${TFSTATE_CONTAINER}" \
-            -backend-config="key=${TFSTATE_KEY}" \
-            -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
-            -backend-config="tenant_id=${ARM_TENANT_ID}" \
-            -backend-config="client_id=${ARM_CLIENT_ID}" \
-            -backend-config="client_secret=${ARM_CLIENT_SECRET}"
+            -backend-config="key=${TFSTATE_KEY}"
         '''
       }
     }
@@ -84,6 +83,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          ACTION_VALUE="${ACTION:-plan}"
 
           export AWS_ACCESS_KEY_ID="${LS_AWS_ACCESS_KEY_ID}"
           export AWS_SECRET_ACCESS_KEY="${LS_AWS_SECRET_ACCESS_KEY}"
@@ -91,7 +91,7 @@ pipeline {
           export TF_VAR_aws_secret_key="${LS_AWS_SECRET_ACCESS_KEY}"
           export TF_VAR_localstack_endpoint_url="${LS_ENDPOINT_URL}"
 
-          if [ "${ACTION}" = "destroy" ]; then
+          if [ "${ACTION_VALUE}" = "destroy" ]; then
             terraform plan -destroy -out=tfplan
           else
             terraform plan -out=tfplan
