@@ -135,6 +135,7 @@ terraform plan -var="enable_eks=true"
 
 ## Known Caveats (EKS + LocalStack)
 
+- EC2/VPC support in LocalStack can differ from real AWS. This project keeps the VPC resource minimal because DNS attribute updates such as `enable_dns_support` and `enable_dns_hostnames` may hang or fail in some LocalStack environments.
 - EKS support in LocalStack can be partial depending on version/edition.
 - EKS or nodegroup creation may fail or behave differently from real AWS.
 - Keep `enable_eks = false` for stable beginner runs unless you know your LocalStack instance supports EKS fully.

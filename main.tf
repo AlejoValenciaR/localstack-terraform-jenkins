@@ -8,9 +8,9 @@ resource "aws_ecr_repository" "app" {
 }
 
 resource "aws_vpc" "main" {
-  cidr_block           = var.vpc_cidr
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+  # LocalStack EC2 can fail when Terraform tries to mutate VPC DNS attributes
+  # immediately after creation, so keep the VPC definition minimal here.
+  cidr_block = var.vpc_cidr
 
   tags = {
     Name = "localstack-main-vpc"
