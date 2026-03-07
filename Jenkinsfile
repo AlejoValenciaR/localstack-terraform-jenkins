@@ -19,7 +19,6 @@ pipeline {
     TFSTATE_STORAGE_ACCOUNT = 'alejatfstate2026demo'
     TFSTATE_CONTAINER       = 'tfstate'
     TFSTATE_KEY             = 'localstack-terraform-jenkins.tfstate'
-    TF_ACTION              = ''
     ARM_USE_AZUREAD         = 'true'
 
     LS_AWS_ACCESS_KEY_ID     = credentials('LS_AWS_ACCESS_KEY_ID')
@@ -80,7 +79,7 @@ pipeline {
       steps {
         echo 'Waiting for runtime choice: apply, destroy, or abort.'
         script {
-          env.TF_ACTION = input(
+          def selectedAction = input(
             message: 'Do you want apply, destroy, or abort?',
             ok: 'Continue',
             parameters: [
@@ -92,7 +91,11 @@ pipeline {
             ]
           )
 
-          if (env.TF_ACTION == 'abort') {
+          selectedAction = selectedAction.trim()
+          writeFile file: '.terraform-action', text: "${selectedAction}\n"
+          echo "Selected runtime action: ${selectedAction}"
+
+          if (selectedAction == 'abort') {
             currentBuild.result = 'ABORTED'
             error('Pipeline aborted by user selection.')
           }
@@ -104,6 +107,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          ACTION_VALUE="$(tr -d '\\r\\n' < .terraform-action)"
 
           export AWS_ACCESS_KEY_ID="${LS_AWS_ACCESS_KEY_ID}"
           export AWS_SECRET_ACCESS_KEY="${LS_AWS_SECRET_ACCESS_KEY}"
@@ -111,7 +115,7 @@ pipeline {
           export TF_VAR_aws_secret_key="${LS_AWS_SECRET_ACCESS_KEY}"
           export TF_VAR_localstack_endpoint_url="${LS_ENDPOINT_URL}"
 
-          if [ "${TF_ACTION}" = "destroy" ]; then
+          if [ "${ACTION_VALUE}" = "destroy" ]; then
             terraform plan -destroy -out=tfplan
           else
             terraform plan -out=tfplan
@@ -139,7 +143,7 @@ pipeline {
 
   post {
     always {
-      sh 'rm -f tfplan'
+      sh 'rm -f tfplan .terraform-action'
     }
   }
 }
