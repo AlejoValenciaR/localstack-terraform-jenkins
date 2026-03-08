@@ -51,7 +51,7 @@ variable "subnet_2_cidr" {
 variable "enable_eks" {
   description = "Set to true to create EKS resources (often limited in LocalStack)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "eks_cluster_name" {
