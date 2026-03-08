@@ -8,6 +8,11 @@ variable "localstack_endpoint_url" {
   description = "Base URL for your LocalStack instance."
   type        = string
   default     = "https://localstack.nauthappstest.tech"
+
+  validation {
+    condition     = can(regex("^https?://", var.localstack_endpoint_url))
+    error_message = "localstack_endpoint_url must start with http:// or https://."
+  }
 }
 
 variable "aws_access_key" {
@@ -51,7 +56,7 @@ variable "subnet_2_cidr" {
 variable "enable_eks" {
   description = "Set to true to create EKS resources (often limited in LocalStack)."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "eks_cluster_name" {

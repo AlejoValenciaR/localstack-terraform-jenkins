@@ -116,26 +116,28 @@ Pipeline stages:
 
 1. `checkout`
 2. `terraform init` (Azure backend style via `-backend-config`)
-3. `fmt/validate`
-4. `choose action`
-5. `plan`
-6. `apply/destroy`
+3. `preflight localstack` (checks `/_localstack/health`)
+4. `fmt/validate`
+5. `choose action`
+6. `plan`
+7. `apply/destroy`
 
 How the runtime action works:
 
 - `apply`: Jenkins creates a normal plan and then applies it
 - `destroy`: Jenkins creates a destroy plan and then applies it
 - `abort`: Jenkins stops the build without changing infrastructure
+- `ENABLE_EKS` runtime option controls `enable_eks` for that specific run:
+  - `false` recommended for clean baseline runs
+  - `true` only when you intentionally test EKS behavior in LocalStack
 
 ## 7) Optional EKS
 
-EKS resources are disabled by default:
+EKS resources are disabled by default (`enable_eks = false`).
 
-```hcl
-enable_eks = false
-```
+In Jenkins, enable EKS only when needed by selecting `ENABLE_EKS=true` in the runtime input step.
 
-To enable:
+For local CLI usage, you can still override with:
 
 ```bash
 terraform plan -var="enable_eks=true"
