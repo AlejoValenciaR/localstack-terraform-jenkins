@@ -79,6 +79,14 @@ Create these credentials in Jenkins (`Manage Jenkins -> Credentials`) as **Secre
 - `ARM_SUBSCRIPTION_ID`
 - `TFSTATE_RESOURCE_GROUP`
 
+When `ENFORCE_IAM=1` is enabled in LocalStack, `LS_AWS_ACCESS_KEY_ID` and `LS_AWS_SECRET_ACCESS_KEY` must belong to a LocalStack IAM principal that is allowed to manage this project resources. In practice, the Jenkins credential needs permission for:
+
+- `ecr:*`
+- `ec2:*`
+- `iam:*`
+- `eks:*`
+- `sts:GetCallerIdentity`
+
 ## 4) Create Jenkins Pipeline Job
 
 1. Create a new Pipeline job.
@@ -136,6 +144,7 @@ terraform plan -var="enable_eks=true"
 ## Known Caveats (EKS + LocalStack)
 
 - EC2/VPC support in LocalStack can differ from real AWS. This project keeps the VPC resource minimal because DNS attribute updates such as `enable_dns_support` and `enable_dns_hostnames` may hang or fail in some LocalStack environments.
+- With `ENFORCE_IAM=1`, this project now creates and attaches its own EKS IAM policies instead of depending on AWS-managed policy ARNs. This is more reliable for LocalStack, but the Jenkins caller itself still must already be authorized to create and manage IAM resources.
 - EKS support in LocalStack can be partial depending on version/edition.
 - EKS or nodegroup creation may fail or behave differently from real AWS.
 - Keep `enable_eks = false` for stable beginner runs unless you know your LocalStack instance supports EKS fully.

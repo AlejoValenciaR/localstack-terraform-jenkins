@@ -50,6 +50,18 @@ data "aws_iam_policy_document" "eks_cluster_assume_role" {
   }
 }
 
+data "aws_iam_policy_document" "eks_cluster_permissions" {
+  statement {
+    actions = [
+      "ec2:*",
+      "eks:*",
+      "iam:PassRole",
+      "sts:AssumeRole",
+    ]
+    resources = ["*"]
+  }
+}
+
 resource "aws_iam_role" "eks_cluster" {
   count = var.enable_eks ? 1 : 0
 
@@ -57,24 +69,18 @@ resource "aws_iam_role" "eks_cluster" {
   assume_role_policy = data.aws_iam_policy_document.eks_cluster_assume_role.json
 }
 
-locals {
-  eks_cluster_policy_arns = toset([
-    "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
-    "arn:aws:iam::aws:policy/AmazonEKSServicePolicy",
-  ])
+resource "aws_iam_policy" "eks_cluster" {
+  count = var.enable_eks ? 1 : 0
 
-  eks_node_policy_arns = toset([
-    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
-    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
-    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
-  ])
+  name   = "${var.eks_cluster_name}-policy"
+  policy = data.aws_iam_policy_document.eks_cluster_permissions.json
 }
 
 resource "aws_iam_role_policy_attachment" "eks_cluster" {
-  for_each = var.enable_eks ? local.eks_cluster_policy_arns : toset([])
+  count = var.enable_eks ? 1 : 0
 
   role       = aws_iam_role.eks_cluster[0].name
-  policy_arn = each.value
+  policy_arn = aws_iam_policy.eks_cluster[0].arn
 }
 
 data "aws_iam_policy_document" "eks_node_assume_role" {
@@ -88,6 +94,18 @@ data "aws_iam_policy_document" "eks_node_assume_role" {
   }
 }
 
+data "aws_iam_policy_document" "eks_node_permissions" {
+  statement {
+    actions = [
+      "ec2:*",
+      "ecr:*",
+      "eks:*",
+      "sts:AssumeRole",
+    ]
+    resources = ["*"]
+  }
+}
+
 resource "aws_iam_role" "eks_node" {
   count = var.enable_eks ? 1 : 0
 
@@ -95,11 +113,18 @@ resource "aws_iam_role" "eks_node" {
   assume_role_policy = data.aws_iam_policy_document.eks_node_assume_role.json
 }
 
+resource "aws_iam_policy" "eks_node" {
+  count = var.enable_eks ? 1 : 0
+
+  name   = "${var.eks_node_group_name}-policy"
+  policy = data.aws_iam_policy_document.eks_node_permissions.json
+}
+
 resource "aws_iam_role_policy_attachment" "eks_node" {
-  for_each = var.enable_eks ? local.eks_node_policy_arns : toset([])
+  count = var.enable_eks ? 1 : 0
 
   role       = aws_iam_role.eks_node[0].name
-  policy_arn = each.value
+  policy_arn = aws_iam_policy.eks_node[0].arn
 }
 
 resource "aws_eks_cluster" "main" {

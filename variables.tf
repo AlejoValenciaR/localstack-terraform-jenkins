@@ -11,14 +11,14 @@ variable "localstack_endpoint_url" {
 }
 
 variable "aws_access_key" {
-  description = "Access key used for LocalStack authentication."
+  description = "Access key used for LocalStack authentication. With ENFORCE_IAM=1 this must belong to an authorized IAM principal."
   type        = string
   default     = "test"
   sensitive   = true
 }
 
 variable "aws_secret_key" {
-  description = "Secret key used for LocalStack authentication."
+  description = "Secret key used for LocalStack authentication. With ENFORCE_IAM=1 this must belong to an authorized IAM principal."
   type        = string
   default     = "test"
   sensitive   = true
