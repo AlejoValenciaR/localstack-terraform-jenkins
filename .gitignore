@@ -10,3 +10,5 @@ crash.log
 Thumbs.db
 .idea/
 .vscode/
+config/infra.env
+artifacts/

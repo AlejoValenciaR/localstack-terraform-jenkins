@@ -1,153 +1,98 @@
-# Terraform + Jenkins + LocalStack (Beginner Friendly)
+# Jenkins + AWS CLI + LocalStack (Terraform-Free)
 
-This project lets Jenkins run Terraform against your LocalStack endpoint:
+This repository was refactored to remove Terraform and use ordered AWS CLI commands instead.
 
-- LocalStack URL: `https://localstack.nauthappstest.tech`
-- AWS region: `us-east-1`
-- Flow: `VS Code git push -> GitHub webhook -> Jenkins pipeline -> terraform plan/apply/destroy`
+## Direct answer to your main question
 
-## What This Project Creates
+Yes. If your LocalStack endpoint is reachable from Jenkins over the internet, Jenkins can call it directly with AWS CLI.
 
-- `aws_ecr_repository` (default name: `hello-spring`)
-- `aws_vpc` (`10.0.0.0/16`)
-- Two subnets:
-  - `10.0.1.0/24`
-  - `10.0.2.0/24`
-- Optional EKS resources (disabled by default):
-  - IAM role for EKS cluster + policy attachments
-  - IAM role for EKS nodegroup + policy attachments
-  - EKS cluster + node group when `enable_eks = true`
+You do **not** need to SSH into the Docker VM just to create resources, as long as:
 
-## Files
+- Jenkins can reach `LS_ENDPOINT_URL`
+- AWS credentials for LocalStack are valid
+- AWS CLI is installed on the Jenkins agent
 
-- `versions.tf` Terraform + provider versions
-- `backend.tf` AzureRM backend block
-- `providers.tf` AWS provider configured for LocalStack endpoint
-- `variables.tf` Input variables and defaults
-- `main.tf` AWS resources
-- `outputs.tf` Useful output values
-- `Jenkinsfile` CI pipeline
-- `.gitignore` Terraform/Jenkins local artifacts
+## What this project manages now
 
-## Prerequisites
+`bash scripts/localstack_infra.sh` handles these resources in command order:
 
-1. Jenkins has an agent with these tools installed:
-   - Terraform (`>= 1.6`)
-   - Git
-   - AWS CLI (for optional connectivity checks)
-2. You already have an Azure Storage backend ready for Terraform state:
-   - Resource Group name
-   - Storage Account name
-   - Blob container name
-3. LocalStack is reachable from Jenkins at:
-   - `https://localstack.nauthappstest.tech`
+1. ECR repository
+2. VPC
+3. Subnet A
+4. Subnet B
+5. Optional EKS/IAM (only when `ENABLE_EKS=true`)
 
-## 1) Verify LocalStack Connectivity
+Supported actions:
 
-Run these checks from your machine or Jenkins agent:
+- `preflight`: checks tools + LocalStack health + STS
+- `apply`: create/update resources
+- `destroy`: delete resources
+- `status`: read current resource state
+
+AWS CLI v1 and v2 are both supported.
+
+## Repository layout
+
+- `Jenkinsfile`: CI pipeline that runs the AWS CLI workflow
+- `scripts/localstack_infra.sh`: main ordered command script
+- `config/infra.env.example`: optional defaults template
+- `artifacts/`: generated at runtime (`outputs.env`, health json)
+
+## Jenkins credentials required
+
+Create these credentials as **Secret text** in Jenkins:
+
+- `LS_AWS_ACCESS_KEY_ID`
+- `LS_AWS_SECRET_ACCESS_KEY`
+- `LS_ENDPOINT_URL`
+
+Example endpoint value:
+
+- `https://localstack.nauthappstest.tech`
+
+## Jenkins pipeline flow
+
+1. Checkout
+2. Tooling check (`bash`, `curl`, `aws`)
+3. Preflight against LocalStack
+4. Manual action choice (`apply`, `destroy`, `status`, `abort`)
+5. Execute `scripts/localstack_infra.sh`
+6. Show and archive `artifacts/outputs.env`
+
+## Optional defaults file
+
+If you want fixed defaults in repo, copy:
 
 ```bash
-curl https://localstack.nauthappstest.tech/_localstack/health
+cp config/infra.env.example config/infra.env
 ```
 
-```bash
-aws --endpoint-url https://localstack.nauthappstest.tech sts get-caller-identity --region us-east-1
-```
+Then edit `config/infra.env` for names/CIDRs/AZs.
 
-If needed, set credentials first:
+Do not store credentials in `config/infra.env`.
+
+## Run locally (without Jenkins)
 
 ```bash
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
+export AWS_REGION=us-east-1
+export LS_ENDPOINT_URL=https://localstack.nauthappstest.tech
+
+bash scripts/localstack_infra.sh preflight
+bash scripts/localstack_infra.sh apply
+bash scripts/localstack_infra.sh status
+# bash scripts/localstack_infra.sh destroy
 ```
 
-## 2) Push This Project to GitHub
+## EKS note for beginners
 
-1. Initialize git (if needed) and push this folder to your GitHub repository.
-2. Make sure your Jenkins job points to this repository.
+EKS support in LocalStack can be partial depending on version/edition.
 
-## 3) Configure Jenkins Credentials
+- Keep `ENABLE_EKS=false` for stable learning runs.
+- Turn `ENABLE_EKS=true` only when you intentionally want to test EKS behavior.
 
-Create these credentials in Jenkins (`Manage Jenkins -> Credentials`) as **Secret text**:
+## Security note
 
-- `LS_AWS_ACCESS_KEY_ID`
-- `LS_AWS_SECRET_ACCESS_KEY`
-- `LS_ENDPOINT_URL` (set value to `https://localstack.nauthappstest.tech`)
-- `ARM_CLIENT_ID`
-- `ARM_CLIENT_SECRET`
-- `ARM_TENANT_ID`
-- `ARM_SUBSCRIPTION_ID`
-- `TFSTATE_RESOURCE_GROUP`
-
-When `ENFORCE_IAM=1` is enabled in LocalStack, `LS_AWS_ACCESS_KEY_ID` and `LS_AWS_SECRET_ACCESS_KEY` must belong to a LocalStack IAM principal that is allowed to manage this project resources. In practice, the Jenkins credential needs permission for:
-
-- `ecr:*`
-- `ec2:*`
-- `iam:*`
-- `eks:*`
-- `sts:GetCallerIdentity`
-
-## 4) Create Jenkins Pipeline Job
-
-1. Create a new Pipeline job.
-2. Configure SCM to your GitHub repo and branch.
-3. Set pipeline script source to `Jenkinsfile`.
-4. Save.
-
-State backend values are now fixed in `Jenkinsfile` environment variables:
-
-- `TFSTATE_STORAGE_ACCOUNT=alejatfstate2026demo`
-- `TFSTATE_CONTAINER=tfstate`
-- `TFSTATE_KEY=localstack-terraform-jenkins.tfstate`
-
-## 5) Configure GitHub Webhook
-
-In GitHub repo settings:
-
-- Payload URL: `<jenkins-url>/github-webhook/`
-- Content type: `application/json`
-- Event: `Just the push event`
-
-This triggers Jenkins on every push. After `terraform validate`, Jenkins pauses and asks you which path to take: `apply`, `destroy`, or `abort`.
-
-## 6) Pipeline Behavior
-
-Pipeline stages:
-
-1. `checkout`
-2. `terraform init` (Azure backend style via `-backend-config`)
-3. `preflight localstack` (checks `/_localstack/health`)
-4. `fmt/validate`
-5. `choose action`
-6. `plan`
-7. `apply/destroy`
-
-How the runtime action works:
-
-- `apply`: Jenkins creates a normal plan and then applies it
-- `destroy`: Jenkins creates a destroy plan and then applies it
-- `abort`: Jenkins stops the build without changing infrastructure
-- `ENABLE_EKS` runtime option controls `enable_eks` for that specific run:
-  - `false` recommended for clean baseline runs
-  - `true` only when you intentionally test EKS behavior in LocalStack
-
-## 7) Optional EKS
-
-EKS resources are disabled by default (`enable_eks = false`).
-
-In Jenkins, enable EKS only when needed by selecting `ENABLE_EKS=true` in the runtime input step.
-
-For local CLI usage, you can still override with:
-
-```bash
-terraform plan -var="enable_eks=true"
-```
-
-## Known Caveats (EKS + LocalStack)
-
-- EC2/VPC support in LocalStack can differ from real AWS. This project keeps the VPC resource minimal because DNS attribute updates such as `enable_dns_support` and `enable_dns_hostnames` may hang or fail in some LocalStack environments.
-- With `ENFORCE_IAM=1`, this project now creates and attaches its own EKS IAM policies instead of depending on AWS-managed policy ARNs. This is more reliable for LocalStack, but the Jenkins caller itself still must already be authorized to create and manage IAM resources.
-- EKS support in LocalStack can be partial depending on version/edition.
-- EKS or nodegroup creation may fail or behave differently from real AWS.
-- Keep `enable_eks = false` for stable beginner runs unless you know your LocalStack instance supports EKS fully.
-- Use this setup for development/testing, not production infrastructure.
+If LocalStack is publicly reachable, protect it with network rules and credentials.
+Do not leave admin-like endpoints open to the internet without restrictions.
