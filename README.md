@@ -1,77 +1,66 @@
-# Jenkins + AWS CLI + LocalStack (Terraform-Free)
+# Jenkins + LocalStack: Terraform or AWS CLI
 
-This repository was refactored to remove Terraform and use ordered AWS CLI commands instead.
+This repository supports two deployment engines, selected at runtime in Jenkins:
 
-## Direct answer to your main question
+- `terraform`: Terraform files (`main.tf`, `variables.tf`, etc.) plus `scripts/terraform_infra.sh`
+- `awscli`: Ordered AWS CLI workflow in `scripts/localstack_infra.sh`
 
-Yes. If your LocalStack endpoint is reachable from Jenkins over the internet, Jenkins can call it directly with AWS CLI.
+Both engines support:
 
-You do **not** need to SSH into the Docker VM just to create resources, as long as:
+- `apply`
+- `destroy`
+- `status`
+- `abort` (pipeline stop from the Jenkins input step)
 
-- Jenkins can reach `LS_ENDPOINT_URL`
-- AWS credentials for LocalStack are valid
-- AWS CLI is installed on the Jenkins agent
+## Jenkins runtime choice
 
-## What this project manages now
+The pipeline now asks for:
 
-`bash scripts/localstack_infra.sh` handles these resources in command order:
+1. `INFRA_DEPLOYMENT`: `terraform` or `awscli`
+2. `INFRA_ACTION`: `apply`, `destroy`, `status`, `abort`
+3. `ENABLE_EKS`: `false` or `true`
 
-1. ECR repository
-2. VPC
-3. Subnet A
-4. Subnet B
-5. Optional EKS/IAM (only when `ENABLE_EKS=true`)
-
-Supported actions:
-
-- `preflight`: checks tools + LocalStack health + STS
-- `apply`: create/update resources
-- `destroy`: delete resources
-- `status`: read current resource state
-
-AWS CLI v1 and v2 are both supported.
+If `abort` is selected, the pipeline exits before infrastructure changes.
 
 ## Repository layout
 
-- `Jenkinsfile`: CI pipeline that runs the AWS CLI workflow
-- `scripts/localstack_infra.sh`: main ordered command script
-- `config/infra.env.example`: optional defaults template
-- `artifacts/`: generated at runtime (`outputs.env`, health json)
+- `Jenkinsfile`: runtime selector + conditional execution
+- `scripts/localstack_infra.sh`: AWS CLI workflow
+- `scripts/terraform_infra.sh`: Terraform workflow wrapper
+- `main.tf`, `variables.tf`, `providers.tf`, `outputs.tf`, `versions.tf`, `backend.tf`: Terraform IaC
+- `config/infra.env.example`: optional defaults for AWS CLI workflow
+- `config/terraform.env.example`: optional defaults for Terraform workflow
+- `artifacts/`: generated at runtime (`outputs.env`, terraform output/state files, health files)
 
-## Jenkins credentials required
+## Jenkins credentials
 
-Create these credentials as **Secret text** in Jenkins:
+Always required (both modes):
 
 - `LS_AWS_ACCESS_KEY_ID`
 - `LS_AWS_SECRET_ACCESS_KEY`
 - `LS_ENDPOINT_URL`
 
-Example endpoint value:
+Required only for `terraform` mode with remote AzureRM backend:
 
-- `https://localstack.nauthappstest.tech`
+- `ARM_CLIENT_ID`
+- `ARM_CLIENT_SECRET`
+- `ARM_TENANT_ID`
+- `ARM_SUBSCRIPTION_ID`
+- `TFSTATE_RESOURCE_GROUP`
 
-## Jenkins pipeline flow
+## Terraform backend defaults
 
-1. Checkout
-2. Tooling check (`bash`, `curl`, `aws`)
-3. Preflight against LocalStack
-4. Manual action choice (`apply`, `destroy`, `status`, `abort`)
-5. Execute `scripts/localstack_infra.sh`
-6. Show and archive `artifacts/outputs.env`
+Jenkinsfile sets:
 
-## Optional defaults file
+- `TFSTATE_STORAGE_ACCOUNT=alejatfstate2026demo`
+- `TFSTATE_CONTAINER=tfstate`
+- `TFSTATE_KEY=localstack-terraform-jenkins.tfstate`
 
-If you want fixed defaults in repo, copy:
+You can override these with environment variables if needed.
 
-```bash
-cp config/infra.env.example config/infra.env
-```
+## Local run examples
 
-Then edit `config/infra.env` for names/CIDRs/AZs.
-
-Do not store credentials in `config/infra.env`.
-
-## Run locally (without Jenkins)
+AWS CLI mode:
 
 ```bash
 export AWS_ACCESS_KEY_ID=test
@@ -79,20 +68,24 @@ export AWS_SECRET_ACCESS_KEY=test
 export AWS_REGION=us-east-1
 export LS_ENDPOINT_URL=https://localstack.nauthappstest.tech
 
-bash scripts/localstack_infra.sh preflight
 bash scripts/localstack_infra.sh apply
 bash scripts/localstack_infra.sh status
-# bash scripts/localstack_infra.sh destroy
 ```
 
-## EKS note for beginners
+Terraform mode (local backend for quick tests):
 
-EKS support in LocalStack can be partial depending on version/edition.
+```bash
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_REGION=us-east-1
+export LS_ENDPOINT_URL=https://localstack.nauthappstest.tech
+export TF_DISABLE_BACKEND=true
 
-- Keep `ENABLE_EKS=false` for stable learning runs.
-- Turn `ENABLE_EKS=true` only when you intentionally want to test EKS behavior.
+bash scripts/terraform_infra.sh apply
+bash scripts/terraform_infra.sh status
+```
 
-## Security note
+## Notes
 
-If LocalStack is publicly reachable, protect it with network rules and credentials.
-Do not leave admin-like endpoints open to the internet without restrictions.
+- `ENABLE_EKS=false` is still the safest default while validating baseline flows.
+- `artifacts/outputs.env` now includes `DEPLOYMENT_MODE=terraform|awscli`.

@@ -624,6 +624,7 @@ collect_state() {
 write_outputs() {
   mkdir -p "${ARTIFACTS_DIR}"
   cat > "${OUTPUT_FILE}" <<EOF
+DEPLOYMENT_MODE=awscli
 AWS_REGION=${AWS_REGION}
 LS_ENDPOINT_URL=${LS_ENDPOINT_URL}
 ECR_REPOSITORY_NAME=${ECR_REPOSITORY_NAME}
