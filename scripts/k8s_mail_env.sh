@@ -108,6 +108,13 @@ prepare_ssh() {
   fi
 }
 
+check_ssh_connectivity() {
+  [[ "${K8S_ACCESS_MODE}" == "ssh-docker" ]] || return
+  if ! run_ssh true >/dev/null 2>&1; then
+    die "SSH connection to ${K8S_REMOTE_HOST} failed. Use the Azure VM public IP or public DNS reachable from Jenkins, not the Azure resource name or a local ~/.ssh/config alias."
+  fi
+}
+
 ssh_target() {
   printf '%s@%s' "${K8S_REMOTE_USER}" "${K8S_REMOTE_HOST}"
 }
@@ -223,6 +230,7 @@ run_apply() {
   require_env MAIL_PASSWORD
   require_env APP_CONTACT_MAIL_FROM
   prepare_ssh
+  check_ssh_connectivity
   detect_remote_container
   validate_target
   apply_secret

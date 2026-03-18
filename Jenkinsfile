@@ -75,8 +75,8 @@ pipeline {
               ),
               string(
                 name: 'K8S_REMOTE_HOST',
-                defaultValue: 'vm-aleja-docker-vm',
-                description: 'Azure VM DNS name or IP reachable from Jenkins.'
+                defaultValue: '68.155.156.136',
+                description: 'Azure VM public IP or public DNS reachable from Jenkins. Do not use the Azure resource name or a local SSH alias.'
               ),
               string(
                 name: 'K8S_REMOTE_PORT',
