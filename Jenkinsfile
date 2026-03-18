@@ -65,13 +65,28 @@ pipeline {
               ),
               string(
                 name: 'K8S_NAMESPACE',
-                defaultValue: 'default',
+                defaultValue: 'hello-spring',
                 description: 'Kubernetes namespace for the target Deployment.'
               ),
               string(
                 name: 'K8S_DEPLOYMENT',
-                defaultValue: '',
+                defaultValue: 'hello-spring',
                 description: 'Target Deployment name to patch with mail environment variables.'
+              ),
+              string(
+                name: 'K8S_REMOTE_HOST',
+                defaultValue: 'vm-aleja-docker-vm',
+                description: 'Azure VM DNS name or IP reachable from Jenkins.'
+              ),
+              string(
+                name: 'K8S_REMOTE_PORT',
+                defaultValue: '22',
+                description: 'SSH port for the Azure VM.'
+              ),
+              string(
+                name: 'K8S_REMOTE_CONTAINER',
+                defaultValue: '',
+                description: 'Optional k3d server container name. Leave blank to auto-detect the first k3d server-0 container.'
               )
             ]
           )
@@ -80,14 +95,20 @@ pipeline {
           def actionValue = selectedAction['INFRA_ACTION'].trim()
           def enableEksValue = selectedAction['ENABLE_EKS'].trim()
           def syncK8sMailValue = selectedAction['SYNC_K8S_MAIL_ENV'].trim()
-          def k8sNamespaceValue = selectedAction['K8S_NAMESPACE']?.trim() ?: 'default'
-          def k8sDeploymentValue = selectedAction['K8S_DEPLOYMENT']?.trim() ?: ''
+          def k8sNamespaceValue = selectedAction['K8S_NAMESPACE']?.trim() ?: 'hello-spring'
+          def k8sDeploymentValue = selectedAction['K8S_DEPLOYMENT']?.trim() ?: 'hello-spring'
+          def k8sRemoteHostValue = selectedAction['K8S_REMOTE_HOST']?.trim() ?: ''
+          def k8sRemotePortValue = selectedAction['K8S_REMOTE_PORT']?.trim() ?: '22'
+          def k8sRemoteContainerValue = selectedAction['K8S_REMOTE_CONTAINER']?.trim() ?: ''
           writeFile file: '.infra-deployment', text: "${deploymentValue}\n"
           writeFile file: '.infra-action', text: "${actionValue}\n"
           writeFile file: '.infra-enable-eks', text: "${enableEksValue}\n"
           writeFile file: '.k8s-sync-mail-env', text: "${syncK8sMailValue}\n"
           writeFile file: '.k8s-namespace', text: "${k8sNamespaceValue}\n"
           writeFile file: '.k8s-deployment', text: "${k8sDeploymentValue}\n"
+          writeFile file: '.k8s-remote-host', text: "${k8sRemoteHostValue}\n"
+          writeFile file: '.k8s-remote-port', text: "${k8sRemotePortValue}\n"
+          writeFile file: '.k8s-remote-container', text: "${k8sRemoteContainerValue}\n"
 
           echo "Selected deployment mode: ${deploymentValue}"
           echo "Selected runtime action: ${actionValue}"
@@ -95,9 +116,16 @@ pipeline {
           echo "Selected SYNC_K8S_MAIL_ENV: ${syncK8sMailValue}"
           echo "Selected K8S_NAMESPACE: ${k8sNamespaceValue}"
           echo "Selected K8S_DEPLOYMENT: ${k8sDeploymentValue}"
+          echo "Selected K8S_REMOTE_HOST: ${k8sRemoteHostValue}"
+          echo "Selected K8S_REMOTE_PORT: ${k8sRemotePortValue}"
+          echo "Selected K8S_REMOTE_CONTAINER: ${k8sRemoteContainerValue}"
 
           if (syncK8sMailValue == 'true' && !k8sDeploymentValue) {
             error('K8S_DEPLOYMENT is required when SYNC_K8S_MAIL_ENV=true.')
+          }
+
+          if (syncK8sMailValue == 'true' && !k8sRemoteHostValue) {
+            error('K8S_REMOTE_HOST is required when SYNC_K8S_MAIL_ENV=true.')
           }
 
           if (actionValue == 'abort') {
@@ -126,8 +154,7 @@ pipeline {
           fi
 
           if [ "${K8S_SYNC_VALUE}" = "true" ]; then
-            command -v kubectl >/dev/null 2>&1
-            kubectl version --client
+            command -v ssh >/dev/null 2>&1
           fi
         '''
       }
@@ -233,12 +260,18 @@ pipeline {
               string(credentialsId: 'MAIL_PORT', variable: 'MAIL_PORT'),
               string(credentialsId: 'MAIL_USERNAME', variable: 'MAIL_USERNAME'),
               string(credentialsId: 'MAIL_PASSWORD', variable: 'MAIL_PASSWORD'),
-              string(credentialsId: 'APP_CONTACT_MAIL_FROM', variable: 'APP_CONTACT_MAIL_FROM')
+              string(credentialsId: 'APP_CONTACT_MAIL_FROM', variable: 'APP_CONTACT_MAIL_FROM'),
+              sshUserPrivateKey(credentialsId: 'VM_SSH_KEY', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
             ]) {
               sh '''
                 set -euo pipefail
+                export K8S_ACCESS_MODE=ssh-docker
                 export K8S_NAMESPACE="$(tr -d '\\r\\n' < .k8s-namespace)"
                 export K8S_DEPLOYMENT="$(tr -d '\\r\\n' < .k8s-deployment)"
+                export K8S_REMOTE_HOST="$(tr -d '\\r\\n' < .k8s-remote-host)"
+                export K8S_REMOTE_PORT="$(tr -d '\\r\\n' < .k8s-remote-port)"
+                export K8S_REMOTE_CONTAINER="$(tr -d '\\r\\n' < .k8s-remote-container)"
+                export K8S_REMOTE_USER="${SSH_USERNAME}"
 
                 bash scripts/k8s_mail_env.sh apply
               '''
@@ -260,7 +293,7 @@ pipeline {
 
   post {
     always {
-      sh 'rm -f tfplan .infra-deployment .infra-action .infra-enable-eks .k8s-sync-mail-env .k8s-namespace .k8s-deployment'
+      sh 'rm -f tfplan .infra-deployment .infra-action .infra-enable-eks .k8s-sync-mail-env .k8s-namespace .k8s-deployment .k8s-remote-host .k8s-remote-port .k8s-remote-container'
       archiveArtifacts artifacts: 'artifacts/*.env,artifacts/*.json,artifacts/*.txt', allowEmptyArchive: true
     }
   }

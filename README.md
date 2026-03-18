@@ -22,9 +22,12 @@ The pipeline now asks for:
 4. `SYNC_K8S_MAIL_ENV`: `false` or `true`
 5. `K8S_NAMESPACE`: target namespace for the application Deployment
 6. `K8S_DEPLOYMENT`: target Deployment name for mail environment injection
+7. `K8S_REMOTE_HOST`: Azure VM DNS name or IP reachable from Jenkins
+8. `K8S_REMOTE_PORT`: SSH port for that Azure VM
+9. `K8S_REMOTE_CONTAINER`: optional k3d server container name; leave blank to auto-detect
 
 If `abort` is selected, the pipeline exits before infrastructure changes.
-If `SYNC_K8S_MAIL_ENV=true`, Jenkins also creates or updates a Kubernetes `Secret` and `ConfigMap` from Jenkins credentials and patches the target Deployment so pods can consume the mail settings.
+If `SYNC_K8S_MAIL_ENV=true`, Jenkins connects to the Azure VM over SSH, runs `docker exec ... kubectl ...` against the k3d server container, creates or updates a Kubernetes `Secret` and `ConfigMap` from Jenkins credentials, and patches the target Deployment so pods can consume the mail settings.
 
 ## Repository layout
 
@@ -61,6 +64,7 @@ Required only when `SYNC_K8S_MAIL_ENV=true`:
 - `MAIL_USERNAME`
 - `MAIL_PASSWORD`
 - `APP_CONTACT_MAIL_FROM`
+- `VM_SSH_KEY` (`SSH Username with private key`)
 
 ## Kubernetes mail sync
 
@@ -68,14 +72,23 @@ When enabled, Jenkins runs `scripts/k8s_mail_env.sh` after the infrastructure st
 
 - creates or updates `mail-secret` with `MAIL_USERNAME` and `MAIL_PASSWORD`
 - creates or updates `mail-config` with `MAIL_HOST`, `MAIL_PORT`, and `APP_CONTACT_MAIL_FROM`
+- connects to the Azure VM over SSH
+- auto-detects the first `k3d-*-server-0` container when `K8S_REMOTE_CONTAINER` is blank
+- executes `kubectl` inside that Docker container
 - patches the target Deployment with those environment variables
 - restarts the Deployment so new pods read the refreshed values
 
 Prerequisites:
 
-- the Jenkins agent must have `kubectl` installed
-- the Jenkins agent must already have access to the target cluster context
+- the Jenkins agent must have an `ssh` client installed
+- Jenkins must have a `VM_SSH_KEY` credential that can connect to the Azure VM
+- the Azure VM must have Docker access to the k3d cluster container
 - the target Deployment must already exist in the selected namespace
+
+Current known workload values:
+
+- `K8S_NAMESPACE=hello-spring`
+- `K8S_DEPLOYMENT=hello-spring`
 
 ## Terraform backend defaults
 
@@ -117,8 +130,15 @@ bash scripts/terraform_infra.sh status
 Kubernetes mail sync only:
 
 ```bash
-export K8S_NAMESPACE=default
-export K8S_DEPLOYMENT=my-app
+export K8S_ACCESS_MODE=ssh-docker
+export K8S_NAMESPACE=hello-spring
+export K8S_DEPLOYMENT=hello-spring
+export K8S_REMOTE_HOST=vm-aleja-docker-vm
+export K8S_REMOTE_PORT=22
+export K8S_REMOTE_USER=azureuser
+# Leave blank to auto-detect the first k3d server-0 container.
+export K8S_REMOTE_CONTAINER=
+export SSH_KEY_FILE=~/.ssh/azure-vm
 export MAIL_HOST=smtp.gmail.com
 export MAIL_PORT=587
 export MAIL_USERNAME=your-account@gmail.com
