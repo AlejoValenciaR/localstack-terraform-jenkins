@@ -57,6 +57,21 @@ pipeline {
                 name: 'ENABLE_EKS',
                 choices: 'false\ntrue',
                 description: 'Enable optional EKS flow (false recommended while you learn).'
+              ),
+              choice(
+                name: 'SYNC_K8S_MAIL_ENV',
+                choices: 'false\ntrue',
+                description: 'Create/update Kubernetes mail Secret + ConfigMap from Jenkins credentials.'
+              ),
+              string(
+                name: 'K8S_NAMESPACE',
+                defaultValue: 'default',
+                description: 'Kubernetes namespace for the target Deployment.'
+              ),
+              string(
+                name: 'K8S_DEPLOYMENT',
+                defaultValue: '',
+                description: 'Target Deployment name to patch with mail environment variables.'
               )
             ]
           )
@@ -64,13 +79,26 @@ pipeline {
           def deploymentValue = selectedAction['INFRA_DEPLOYMENT'].trim()
           def actionValue = selectedAction['INFRA_ACTION'].trim()
           def enableEksValue = selectedAction['ENABLE_EKS'].trim()
+          def syncK8sMailValue = selectedAction['SYNC_K8S_MAIL_ENV'].trim()
+          def k8sNamespaceValue = selectedAction['K8S_NAMESPACE']?.trim() ?: 'default'
+          def k8sDeploymentValue = selectedAction['K8S_DEPLOYMENT']?.trim() ?: ''
           writeFile file: '.infra-deployment', text: "${deploymentValue}\n"
           writeFile file: '.infra-action', text: "${actionValue}\n"
           writeFile file: '.infra-enable-eks', text: "${enableEksValue}\n"
+          writeFile file: '.k8s-sync-mail-env', text: "${syncK8sMailValue}\n"
+          writeFile file: '.k8s-namespace', text: "${k8sNamespaceValue}\n"
+          writeFile file: '.k8s-deployment', text: "${k8sDeploymentValue}\n"
 
           echo "Selected deployment mode: ${deploymentValue}"
           echo "Selected runtime action: ${actionValue}"
           echo "Selected ENABLE_EKS: ${enableEksValue}"
+          echo "Selected SYNC_K8S_MAIL_ENV: ${syncK8sMailValue}"
+          echo "Selected K8S_NAMESPACE: ${k8sNamespaceValue}"
+          echo "Selected K8S_DEPLOYMENT: ${k8sDeploymentValue}"
+
+          if (syncK8sMailValue == 'true' && !k8sDeploymentValue) {
+            error('K8S_DEPLOYMENT is required when SYNC_K8S_MAIL_ENV=true.')
+          }
 
           if (actionValue == 'abort') {
             currentBuild.result = 'ABORTED'
@@ -85,6 +113,7 @@ pipeline {
         sh '''
           set -euo pipefail
           DEPLOYMENT_VALUE="$(tr -d '\\r\\n' < .infra-deployment)"
+          K8S_SYNC_VALUE="$(tr -d '\\r\\n' < .k8s-sync-mail-env)"
 
           command -v bash >/dev/null 2>&1
           command -v curl >/dev/null 2>&1
@@ -94,6 +123,11 @@ pipeline {
           if [ "${DEPLOYMENT_VALUE}" = "terraform" ]; then
             command -v terraform >/dev/null 2>&1
             terraform version
+          fi
+
+          if [ "${K8S_SYNC_VALUE}" = "true" ]; then
+            command -v kubectl >/dev/null 2>&1
+            kubectl version --client
           fi
         '''
       }
@@ -183,6 +217,37 @@ pipeline {
       }
     }
 
+    stage('sync k8s mail env') {
+      steps {
+        script {
+          def actionValue = readFile('.infra-action').trim()
+          def syncK8sMailValue = readFile('.k8s-sync-mail-env').trim()
+
+          if (syncK8sMailValue != 'true') {
+            echo 'Skipping Kubernetes mail sync because SYNC_K8S_MAIL_ENV=false.'
+          } else if (actionValue == 'destroy') {
+            echo 'Skipping Kubernetes mail sync because INFRA_ACTION=destroy.'
+          } else {
+            withCredentials([
+              string(credentialsId: 'MAIL_HOST', variable: 'MAIL_HOST'),
+              string(credentialsId: 'MAIL_PORT', variable: 'MAIL_PORT'),
+              string(credentialsId: 'MAIL_USERNAME', variable: 'MAIL_USERNAME'),
+              string(credentialsId: 'MAIL_PASSWORD', variable: 'MAIL_PASSWORD'),
+              string(credentialsId: 'APP_CONTACT_MAIL_FROM', variable: 'APP_CONTACT_MAIL_FROM')
+            ]) {
+              sh '''
+                set -euo pipefail
+                export K8S_NAMESPACE="$(tr -d '\\r\\n' < .k8s-namespace)"
+                export K8S_DEPLOYMENT="$(tr -d '\\r\\n' < .k8s-deployment)"
+
+                bash scripts/k8s_mail_env.sh apply
+              '''
+            }
+          }
+        }
+      }
+    }
+
     stage('show outputs') {
       when {
         expression { fileExists('artifacts/outputs.env') }
@@ -195,7 +260,7 @@ pipeline {
 
   post {
     always {
-      sh 'rm -f tfplan .infra-deployment .infra-action .infra-enable-eks'
+      sh 'rm -f tfplan .infra-deployment .infra-action .infra-enable-eks .k8s-sync-mail-env .k8s-namespace .k8s-deployment'
       archiveArtifacts artifacts: 'artifacts/*.env,artifacts/*.json,artifacts/*.txt', allowEmptyArchive: true
     }
   }

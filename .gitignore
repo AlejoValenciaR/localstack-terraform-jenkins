@@ -11,5 +11,6 @@ Thumbs.db
 .idea/
 .vscode/
 config/infra.env
+config/k8s.env
 config/terraform.env
 artifacts/
