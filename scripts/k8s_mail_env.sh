@@ -123,6 +123,11 @@ run_ssh() {
   ssh "${SSH_ARGS[@]}" "$(ssh_target)" "$@"
 }
 
+run_ssh_shell() {
+  local command="$1"
+  ssh "${SSH_ARGS[@]}" "$(ssh_target)" "bash -lc $(printf '%q' "${command}")"
+}
+
 detect_remote_container() {
   [[ "${K8S_ACCESS_MODE}" == "ssh-docker" ]] || return
   if [[ -n "${K8S_REMOTE_CONTAINER}" ]]; then
@@ -131,7 +136,7 @@ detect_remote_container() {
   fi
 
   log "Auto-detecting k3d server container on ${K8S_REMOTE_HOST}"
-  K8S_REMOTE_CONTAINER="$(run_ssh sh -lc "docker ps --format '{{.Names}}' | grep -E '^k3d-.*-server-0$' | head -n 1")"
+  K8S_REMOTE_CONTAINER="$(run_ssh_shell "docker ps --format '{{.Names}}' | grep -E '^k3d-.*-server-0$' | head -n 1")"
   [[ -n "${K8S_REMOTE_CONTAINER}" ]] || die "Could not auto-detect a k3d server container on ${K8S_REMOTE_HOST}."
   log "Detected remote Kubernetes container: ${K8S_REMOTE_CONTAINER}"
 }
