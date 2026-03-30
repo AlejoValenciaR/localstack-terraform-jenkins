@@ -63,6 +63,11 @@ pipeline {
                 choices: 'false\ntrue',
                 description: 'Create/update Kubernetes mail Secret + ConfigMap from Jenkins credentials.'
               ),
+              choice(
+                name: 'SYNC_PUBLIC_K8S_ROUTES',
+                choices: 'false\ntrue',
+                description: 'Create/update the public nginx route include that forwards branded app paths into the k3d ingress.'
+              ),
               string(
                 name: 'K8S_NAMESPACE',
                 defaultValue: 'hello-spring',
@@ -87,6 +92,16 @@ pipeline {
                 name: 'K8S_REMOTE_CONTAINER',
                 defaultValue: '',
                 description: 'Optional k3d server container name. Leave blank to auto-detect the first k3d server-0 container.'
+              ),
+              string(
+                name: 'PUBLIC_GATEWAY_SERVER_NAME',
+                defaultValue: 'nauthappstest.tech',
+                description: 'Public server_name configured in nginx on the Azure VM.'
+              ),
+              string(
+                name: 'PUBLIC_GATEWAY_SITE_CONFIG',
+                defaultValue: '',
+                description: 'Optional exact nginx site config path on the Azure VM. Leave blank to auto-detect.'
               )
             ]
           )
@@ -95,30 +110,39 @@ pipeline {
           def actionValue = selectedAction['INFRA_ACTION'].trim()
           def enableEksValue = selectedAction['ENABLE_EKS'].trim()
           def syncK8sMailValue = selectedAction['SYNC_K8S_MAIL_ENV'].trim()
+          def syncPublicRoutesValue = selectedAction['SYNC_PUBLIC_K8S_ROUTES'].trim()
           def k8sNamespaceValue = selectedAction['K8S_NAMESPACE']?.trim() ?: 'hello-spring'
           def k8sDeploymentValue = selectedAction['K8S_DEPLOYMENT']?.trim() ?: 'hello-spring'
           def k8sRemoteHostValue = selectedAction['K8S_REMOTE_HOST']?.trim() ?: ''
           def k8sRemotePortValue = selectedAction['K8S_REMOTE_PORT']?.trim() ?: '22'
           def k8sRemoteContainerValue = selectedAction['K8S_REMOTE_CONTAINER']?.trim() ?: ''
+          def publicGatewayServerNameValue = selectedAction['PUBLIC_GATEWAY_SERVER_NAME']?.trim() ?: 'nauthappstest.tech'
+          def publicGatewaySiteConfigValue = selectedAction['PUBLIC_GATEWAY_SITE_CONFIG']?.trim() ?: ''
           writeFile file: '.infra-deployment', text: "${deploymentValue}\n"
           writeFile file: '.infra-action', text: "${actionValue}\n"
           writeFile file: '.infra-enable-eks', text: "${enableEksValue}\n"
           writeFile file: '.k8s-sync-mail-env', text: "${syncK8sMailValue}\n"
+          writeFile file: '.public-gateway-sync', text: "${syncPublicRoutesValue}\n"
           writeFile file: '.k8s-namespace', text: "${k8sNamespaceValue}\n"
           writeFile file: '.k8s-deployment', text: "${k8sDeploymentValue}\n"
           writeFile file: '.k8s-remote-host', text: "${k8sRemoteHostValue}\n"
           writeFile file: '.k8s-remote-port', text: "${k8sRemotePortValue}\n"
           writeFile file: '.k8s-remote-container', text: "${k8sRemoteContainerValue}\n"
+          writeFile file: '.public-gateway-server-name', text: "${publicGatewayServerNameValue}\n"
+          writeFile file: '.public-gateway-site-config', text: "${publicGatewaySiteConfigValue}\n"
 
           echo "Selected deployment mode: ${deploymentValue}"
           echo "Selected runtime action: ${actionValue}"
           echo "Selected ENABLE_EKS: ${enableEksValue}"
           echo "Selected SYNC_K8S_MAIL_ENV: ${syncK8sMailValue}"
+          echo "Selected SYNC_PUBLIC_K8S_ROUTES: ${syncPublicRoutesValue}"
           echo "Selected K8S_NAMESPACE: ${k8sNamespaceValue}"
           echo "Selected K8S_DEPLOYMENT: ${k8sDeploymentValue}"
           echo "Selected K8S_REMOTE_HOST: ${k8sRemoteHostValue}"
           echo "Selected K8S_REMOTE_PORT: ${k8sRemotePortValue}"
           echo "Selected K8S_REMOTE_CONTAINER: ${k8sRemoteContainerValue}"
+          echo "Selected PUBLIC_GATEWAY_SERVER_NAME: ${publicGatewayServerNameValue}"
+          echo "Selected PUBLIC_GATEWAY_SITE_CONFIG: ${publicGatewaySiteConfigValue}"
 
           if (syncK8sMailValue == 'true' && !k8sDeploymentValue) {
             error('K8S_DEPLOYMENT is required when SYNC_K8S_MAIL_ENV=true.')
@@ -126,6 +150,10 @@ pipeline {
 
           if (syncK8sMailValue == 'true' && !k8sRemoteHostValue) {
             error('K8S_REMOTE_HOST is required when SYNC_K8S_MAIL_ENV=true.')
+          }
+
+          if (syncPublicRoutesValue == 'true' && !k8sRemoteHostValue) {
+            error('K8S_REMOTE_HOST is required when SYNC_PUBLIC_K8S_ROUTES=true.')
           }
 
           if (actionValue == 'abort') {
@@ -142,6 +170,7 @@ pipeline {
           set -euo pipefail
           DEPLOYMENT_VALUE="$(tr -d '\\r\\n' < .infra-deployment)"
           K8S_SYNC_VALUE="$(tr -d '\\r\\n' < .k8s-sync-mail-env)"
+          PUBLIC_GATEWAY_SYNC_VALUE="$(tr -d '\\r\\n' < .public-gateway-sync)"
 
           command -v bash >/dev/null 2>&1
           command -v curl >/dev/null 2>&1
@@ -153,7 +182,7 @@ pipeline {
             terraform version
           fi
 
-          if [ "${K8S_SYNC_VALUE}" = "true" ]; then
+          if [ "${K8S_SYNC_VALUE}" = "true" ] || [ "${PUBLIC_GATEWAY_SYNC_VALUE}" = "true" ]; then
             command -v ssh >/dev/null 2>&1
           fi
         '''
@@ -281,6 +310,37 @@ pipeline {
       }
     }
 
+    stage('sync public gateway routes') {
+      steps {
+        script {
+          def actionValue = readFile('.infra-action').trim()
+          def syncPublicRoutesValue = readFile('.public-gateway-sync').trim()
+
+          if (syncPublicRoutesValue != 'true') {
+            echo 'Skipping public gateway route sync because SYNC_PUBLIC_K8S_ROUTES=false.'
+          } else if (actionValue == 'destroy') {
+            echo 'Skipping public gateway route sync because INFRA_ACTION=destroy.'
+          } else {
+            withCredentials([
+              sshUserPrivateKey(credentialsId: 'VM_SSH_KEY', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+            ]) {
+              sh '''
+                set -euo pipefail
+                export PUBLIC_GATEWAY_ACCESS_MODE=ssh
+                export PUBLIC_GATEWAY_REMOTE_HOST="$(tr -d '\\r\\n' < .k8s-remote-host)"
+                export PUBLIC_GATEWAY_REMOTE_PORT="$(tr -d '\\r\\n' < .k8s-remote-port)"
+                export PUBLIC_GATEWAY_REMOTE_USER="${SSH_USERNAME}"
+                export PUBLIC_GATEWAY_SERVER_NAME="$(tr -d '\\r\\n' < .public-gateway-server-name)"
+                export PUBLIC_GATEWAY_SITE_CONFIG="$(tr -d '\\r\\n' < .public-gateway-site-config)"
+
+                bash scripts/public_k8s_gateway_routes.sh apply
+              '''
+            }
+          }
+        }
+      }
+    }
+
     stage('show outputs') {
       when {
         expression { fileExists('artifacts/outputs.env') }
@@ -293,7 +353,7 @@ pipeline {
 
   post {
     always {
-      sh 'rm -f tfplan .infra-deployment .infra-action .infra-enable-eks .k8s-sync-mail-env .k8s-namespace .k8s-deployment .k8s-remote-host .k8s-remote-port .k8s-remote-container'
+      sh 'rm -f tfplan .infra-deployment .infra-action .infra-enable-eks .k8s-sync-mail-env .public-gateway-sync .k8s-namespace .k8s-deployment .k8s-remote-host .k8s-remote-port .k8s-remote-container .public-gateway-server-name .public-gateway-site-config'
       archiveArtifacts artifacts: 'artifacts/*.env,artifacts/*.json,artifacts/*.txt', allowEmptyArchive: true
     }
   }
