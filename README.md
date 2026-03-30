@@ -118,7 +118,7 @@ When enabled, Jenkins runs `scripts/public_k8s_gateway_routes.sh` after the infr
 - writes an nginx include file with `location` blocks only for those branded paths
 - proxies those paths to `http://127.0.0.1:8081`, which is the k3d ingress listener published by LocalStack
 - auto-detects the nginx site config for `nauthappstest.tech` unless you provide `PUBLIC_GATEWAY_SITE_CONFIG`
-- adds `include /etc/nginx/nauthapps.d/*.conf;` to that server block when missing
+- adds `include /etc/nginx/nauthapps.d/*.conf;` to the matching `server_name` block when missing, preferring the TLS/443 block when the file contains both HTTP and HTTPS server blocks
 - runs `nginx -t` and reloads nginx
 
 Why this matters:
@@ -133,7 +133,7 @@ Prerequisites:
 - the Jenkins agent must have an `ssh` client installed
 - Jenkins must have the `VM_SSH_KEY` credential
 - the Azure VM user must be able to run `sudo nginx -t` and reload nginx
-- the nginx site file for `PUBLIC_GATEWAY_SERVER_NAME` should ideally be a single-site config file
+- the nginx site file for `PUBLIC_GATEWAY_SERVER_NAME` can be a single-site file or a combined HTTP+HTTPS file; if several identical matching blocks exist, set `PUBLIC_GATEWAY_SITE_CONFIG` to a more specific file or add the include manually
 
 ## Terraform backend defaults
 

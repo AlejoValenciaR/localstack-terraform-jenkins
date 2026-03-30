@@ -88,7 +88,7 @@ detect_tools() {
 }
 
 prepare_ssh() {
-  [[ "${PUBLIC_GATEWAY_ACCESS_MODE}" == "ssh" ]] || return
+  [[ "${PUBLIC_GATEWAY_ACCESS_MODE}" == "ssh" ]] || return 0
   [[ -n "${PUBLIC_GATEWAY_REMOTE_HOST}" ]] || die "PUBLIC_GATEWAY_REMOTE_HOST is required when PUBLIC_GATEWAY_ACCESS_MODE=ssh."
   [[ -n "${PUBLIC_GATEWAY_REMOTE_USER}" ]] || die "PUBLIC_GATEWAY_REMOTE_USER is required when PUBLIC_GATEWAY_ACCESS_MODE=ssh."
   [[ -n "${SSH_KEY_FILE:-}" ]] || die "SSH_KEY_FILE is required when PUBLIC_GATEWAY_ACCESS_MODE=ssh."
@@ -120,7 +120,7 @@ run_remote_shell() {
 }
 
 check_connectivity() {
-  [[ "${PUBLIC_GATEWAY_ACCESS_MODE}" == "ssh" ]] || return
+  [[ "${PUBLIC_GATEWAY_ACCESS_MODE}" == "ssh" ]] || return 0
   if ! run_remote_shell true >/dev/null 2>&1; then
     die "SSH connection to ${PUBLIC_GATEWAY_REMOTE_HOST} failed."
   fi
@@ -232,57 +232,213 @@ upload_include_file() {
 }
 
 ensure_include_directive() {
-  local include_line="    include ${PUBLIC_GATEWAY_INCLUDE_DIR}/*.conf;"
+  local include_directive="include ${PUBLIC_GATEWAY_INCLUDE_DIR}/*.conf;"
+  local include_line="    ${include_directive}"
   local site_config_q
+  local target_server_name_q
+  local include_directive_q
   local include_line_q
+  local awk_program
+  local awk_program_q
 
   site_config_q="$(printf '%q' "${PUBLIC_GATEWAY_SITE_CONFIG}")"
+  target_server_name_q="$(printf '%q' "${PUBLIC_GATEWAY_SERVER_NAME}")"
+  include_directive_q="$(printf '%q' "${include_directive}")"
   include_line_q="$(printf '%q' "${include_line}")"
+  awk_program="$(cat <<'AWK'
+function strip_comment(line,    clean) {
+  clean = line
+  sub(/[[:space:]]*#.*/, "", clean)
+  return clean
+}
+
+function trim(line,    clean) {
+  clean = line
+  sub(/^[[:space:]]+/, "", clean)
+  sub(/[[:space:]]+$/, "", clean)
+  return clean
+}
+
+function brace_delta(line,    clean, open_count, close_count) {
+  clean = strip_comment(line)
+  open_count = gsub(/\{/, "{", clean)
+  close_count = gsub(/\}/, "}", clean)
+  return open_count - close_count
+}
+
+function line_has_include(line, include_directive,    clean) {
+  clean = trim(strip_comment(line))
+  return clean == include_directive
+}
+
+function line_has_server_name(line, target_server_name,    clean, count, names, i) {
+  clean = strip_comment(line)
+  if (clean !~ /^[[:space:]]*server_name[[:space:]]+/) {
+    return 0
+  }
+
+  sub(/^[[:space:]]*server_name[[:space:]]+/, "", clean)
+  sub(/[[:space:]]*;[[:space:]]*$/, "", clean)
+  count = split(clean, names, /[[:space:]]+/)
+
+  for (i = 1; i <= count; i++) {
+    if (names[i] == target_server_name) {
+      return 1
+    }
+  }
+
+  return 0
+}
+
+function line_is_tls_listen(line,    clean) {
+  clean = strip_comment(line)
+  if (clean !~ /^[[:space:]]*listen[[:space:]]+/) {
+    return 0
+  }
+
+  if (clean ~ /(^|[[:space:]:])443([[:space:];]|$)/) {
+    return 1
+  }
+
+  if (clean ~ /(^|[[:space:]])ssl([[:space:];]|$)/) {
+    return 1
+  }
+
+  return 0
+}
+
+{
+  lines[NR] = $0
+
+  if (!in_server && depth == 0 && strip_comment($0) ~ /^[[:space:]]*server[[:space:]]*\{[[:space:]]*$/) {
+    in_server = 1
+    block_count++
+    block_matches_name[block_count] = 0
+    block_is_tls[block_count] = 0
+    block_has_include[block_count] = 0
+    block_end[block_count] = 0
+  }
+
+  if (in_server) {
+    if (line_has_server_name($0, target_server_name)) {
+      block_matches_name[block_count] = 1
+    }
+
+    if (line_is_tls_listen($0)) {
+      block_is_tls[block_count] = 1
+    }
+
+    if (line_has_include($0, include_directive)) {
+      block_has_include[block_count] = 1
+    }
+  }
+
+  depth += brace_delta($0)
+
+  if (depth < 0) {
+    print "Nginx config parsing failed: brace depth became negative near line " NR "." > "/dev/stderr"
+    exit 20
+  }
+
+  if (in_server && depth == 0) {
+    block_end[block_count] = NR
+    in_server = 0
+  }
+}
+
+END {
+  if (depth != 0) {
+    print "Nginx config parsing failed: unbalanced braces in " FILENAME "." > "/dev/stderr"
+    exit 21
+  }
+
+  match_count = 0
+  tls_match_count = 0
+  include_match_count = 0
+  include_match_block = 0
+
+  for (i = 1; i <= block_count; i++) {
+    if (!block_matches_name[i]) {
+      continue
+    }
+
+    matches[++match_count] = i
+
+    if (block_is_tls[i]) {
+      tls_matches[++tls_match_count] = i
+    }
+
+    if (block_has_include[i]) {
+      include_match_count++
+      include_match_block = i
+    }
+  }
+
+  if (match_count == 0) {
+    print "Could not find a server block with server_name " target_server_name " in " FILENAME "." > "/dev/stderr"
+    exit 22
+  }
+
+  if (tls_match_count == 1) {
+    target_block = tls_matches[1]
+  } else if (match_count == 1) {
+    target_block = matches[1]
+  } else if (include_match_count == 1) {
+    target_block = include_match_block
+  } else {
+    print "Cannot safely inject the include into " FILENAME " because " match_count " server blocks match server_name " target_server_name "." > "/dev/stderr"
+    print "Set PUBLIC_GATEWAY_SITE_CONFIG to a dedicated single-site file, or add this line manually inside the intended server block:" > "/dev/stderr"
+    print include_line > "/dev/stderr"
+    exit 23
+  }
+
+  if (block_has_include[target_block]) {
+    for (i = 1; i <= NR; i++) {
+      print lines[i]
+    }
+    exit 0
+  }
+
+  if (block_end[target_block] == 0) {
+    print "Could not determine where the matching server block ends in " FILENAME "." > "/dev/stderr"
+    exit 24
+  }
+
+  for (i = 1; i <= NR; i++) {
+    if (i == block_end[target_block]) {
+      print include_line
+    }
+    print lines[i]
+  }
+}
+AWK
+)"
+  awk_program_q="$(printf '%q' "${awk_program}")"
 
   run_remote_shell "
     site_config=${site_config_q}
+    target_server_name=${target_server_name_q}
+    include_directive=${include_directive_q}
     include_line=${include_line_q}
+    awk_program=${awk_program_q}
+    awk_output=\$(mktemp)
+    tmp_file=\"\${site_config}.tmp.codex\"
+    backup_file=\"\${site_config}.bak.codex\"
+    printf '%s\n' \"\${awk_program}\" | awk \
+      -v target_server_name=\"\${target_server_name}\" \
+      -v include_directive=\"\${include_directive}\" \
+      -v include_line=\"\${include_line}\" \
+      -f - \"\${site_config}\" > \"\${awk_output}\"
 
-    if grep -Fq \"\${include_line}\" \"\${site_config}\"; then
+    if cmp -s \"\${awk_output}\" \"\${site_config}\"; then
+      rm -f \"\${awk_output}\"
       exit 0
     fi
 
-    server_block_count=\$(grep -Ec '^[[:space:]]*server[[:space:]]*\\{' \"\${site_config}\")
-    if [ \"\${server_block_count}\" -ne 1 ]; then
-      echo \"Cannot safely inject the include into \${site_config} because it has \${server_block_count} server blocks.\" >&2
-      echo \"Set PUBLIC_GATEWAY_SITE_CONFIG to a dedicated single-site file, or add this line manually inside the server block:\" >&2
-      echo \"\${include_line}\" >&2
-      exit 1
-    fi
-
-    tmp_file=\"\${site_config}.tmp.codex\"
-    backup_file=\"\${site_config}.bak.codex\"
     sudo cp \"\${site_config}\" \"\${backup_file}\"
-
-    awk -v include_line=\"\${include_line}\" '
-      { lines[NR] = \$0 }
-      END {
-        last_close = 0
-        for (i = 1; i <= NR; i++) {
-          if (lines[i] ~ /^[[:space:]]*}[[:space:]]*$/) {
-            last_close = i
-          }
-        }
-
-        if (last_close == 0) {
-          exit 2
-        }
-
-        for (i = 1; i <= NR; i++) {
-          if (i == last_close) {
-            print include_line
-          }
-          print lines[i]
-        }
-      }
-    ' \"\${site_config}\" | sudo tee \"\${tmp_file}\" >/dev/null
-
+    sudo tee \"\${tmp_file}\" >/dev/null < \"\${awk_output}\"
     sudo mv \"\${tmp_file}\" \"\${site_config}\"
+    rm -f \"\${awk_output}\"
   "
 }
 
